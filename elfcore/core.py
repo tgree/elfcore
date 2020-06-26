@@ -56,19 +56,20 @@ class Core:
                            1,                # e_ident[4] = ELFCLASS32
                            1,                # e_ident[5] = ELFDATA2LSB
                            1,                # e_ident[6] = EV_CURRENT
-                           0x61,             # ???
+                           0x40,             # e_ident[7] = ELFOSABI_ARM_AEABI
                            4,                # e_type     = ET_CORE
                            40,               # e_machine  = EM_ARM
                            1,                # e_version  = EV_CURRENT
                            0,                # e_entry
                            self.phoff,       # e_phoff
-                           0, #self.shoff,       # e_shoff
+                           0,                # e_shoff
                            0,                # e_flags
                            Core.EHDR_SIZE,   # e_ehsize
                            Core.PHDR_SIZE,   # e_phentsize
-                           len(self.notes) + len(self.mmaps),  # e_phnum
+                           len(self.notes) +
+                           len(self.mmaps),  # e_phnum
                            Core.SHDR_SIZE,   # e_shentsize
-                           0, #1 + len(self.mmaps),  # e_shnum
+                           0,                # e_shnum
                            0                 # e_shstrndx
                            )
         f.write(data)
@@ -99,24 +100,6 @@ class Core:
                            )
         f.write(data)
 
-    def _write_null_shdr(self, f):
-        f.write(b'\x00'*Core.SHDR_SIZE)
-
-    #def _write_progbits_shdr(self, f, mmap, sh_offset, sh_addralign):
-    #    data = struct.pack(Core.SHDR_FORMAT,
-    #                       0,               # sh_name (string tbl index)
-    #                       1,               # sh_type = SHT_PROGBITS
-    #                       3,               # sh_flags = (SHF_WRITE | SHF_ALLOC)
-    #                       mmap.addr,       # sh_addr
-    #                       sh_offset,       # sh_offset
-    #                       len(mmap.data),  # sh_size
-    #                       0,               # sh_link
-    #                       0,               # sh_info
-    #                       1, #sh_addralign,    # sh_addralign
-    #                       0,               # sh_entsize
-    #                       )
-    #    f.write(data)
-
     def add_mem_map(self, addr, data):
         '''
         Adds the specified chunk of data to the core at the specified virtual
@@ -124,15 +107,16 @@ class Core:
         '''
         self.mmaps.append(MemMap(addr, data))
 
-    def add_thread(self):
+    def add_thread(self, regs, pid=1, sig=6):
         '''
-        Adds a thread.
+        Adds a thread.  The registers are either a 17- or 18-entry array with
+        the following contents, depending on if FPSCR is included or not:
+        
+            [r0, ..., r15, <fpscr>, xpsr]
         '''
         ns = NoteSection()
         ns.add_prpsinfo('xtalx', 'xtalx')
-        ns.add_prstatus(1, 9,
-                        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                         0, 0])
+        ns.add_prstatus(pid, sig, regs)
         self.notes.append(ns)
 
     def write(self, path):
@@ -174,13 +158,6 @@ class Core:
         for m in self.mmaps:
             self._write_pt_load_phdr(f, m, pos, data_align)
             pos += round_up_pow_2(len(m.data), data_align)
-
-        ## Now, write a PROGBITS section header for each memory mapping.
-        #pos = data_offset
-        #self._write_null_shdr(f)
-        #for m in self.mmaps:
-        #    self._write_progbits_shdr(f, m, pos, data_align)
-        #    pos += round_up_pow_2(len(m.data), data_align)
 
         # Now, write the PT_NOTE sections.
         for n in self.notes:

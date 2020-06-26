@@ -45,13 +45,18 @@ class NoteSection:
         self.notes.append(n)
         self.data += n.serialize()
 
-    def add_prstatus(self, pid, sig, regs, fpvalid=True):
+    def add_prstatus(self, pid, sig, regs):
         '''
         Adds an NT_PRSTATUS note to the section.  The regs should be an array
-        of 18 values with the following contents:
+        of 17 or 18 values with the following contents, depending on if FPSCR
+        is included:
         
-            [r0, ..., r15, cpsr, fpscr]
+            [r0, ..., r15, <fpscr>, xpsr]
         '''
+        assert len(regs) in (17, 18)
+        fpvalid = (len(regs) == 18)
+        if not fpvalid:
+            regs = regs[:16] + [0] + regs[16:]
         data = struct.pack('<12xH10xL44x18LL', sig, pid, *regs, fpvalid)
         assert len(data) == 148
         self.add_note('CORE', 1, data)
