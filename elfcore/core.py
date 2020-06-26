@@ -2,6 +2,26 @@
 import struct
 
 from .mmap import MemMap
+from .note import NoteSection
+
+
+# elf32-arm.c:elf32_arm_nabi_write_core_note()
+# NT_PRPSINFO:
+#   owner = "CORE"
+#   data[128] = {0...}
+#   strncpy(data + 28, va_arg(ap, const char*), 16)
+#   strncpy(data + 44, va_arg(ap, const char*), 80)
+#
+# NT_PRSTATUS:
+#   owner = "CORE"
+#   data[148] = {0...}
+#   bfd_put_32(pid, data + 24)
+#   bfd_put_16(cursig, data + 12)
+#   memcpy(data + 72, greg, 72)
+#   gregs looks like:
+#       r0 - r15
+#       CPSR
+#       FPSCR
 
 
 def round_up_pow_2(v, p2):
@@ -9,7 +29,7 @@ def round_up_pow_2(v, p2):
 
 
 class Core:
-    EHDR_FORMAT = '<7B9xHHLLLLLHHHHHH'
+    EHDR_FORMAT = '<8B8xHHLLLLLHHHHHH'
     EHDR_SIZE   = struct.calcsize(EHDR_FORMAT)
 
     PHDR_FORMAT = '<LLLLLLLL'
@@ -20,41 +40,82 @@ class Core:
 
     def __init__(self):
         self.mmaps = []
+        self.notes = []
+
+    @property
+    def phoff(self):
+        return Core.EHDR_SIZE if self.mmaps else 0
+
+    @property
+    def shoff(self):
+        return self.phoff + (1 + len(self.mmaps))*Core.PHDR_SIZE
 
     def _write_elf_header(self, f):
         data = struct.pack(Core.EHDR_FORMAT,
-                           0x7F, 'E', 'L', 'F',
+                           0x7F, ord('E'), ord('L'), ord('F'),
                            1,                # e_ident[4] = ELFCLASS32
                            1,                # e_ident[5] = ELFDATA2LSB
                            1,                # e_ident[6] = EV_CURRENT
+                           0x61,             # ???
                            4,                # e_type     = ET_CORE
                            40,               # e_machine  = EM_ARM
                            1,                # e_version  = EV_CURRENT
                            0,                # e_entry
-                           Core.EHDR_SIZE,   # e_phoff
-                           0,                # e_shoff
+                           self.phoff,       # e_phoff
+                           0, #self.shoff,       # e_shoff
                            0,                # e_flags
                            Core.EHDR_SIZE,   # e_ehsize
                            Core.PHDR_SIZE,   # e_phentsize
-                           len(self.mmaps),  # e_phnum
+                           len(self.notes) + len(self.mmaps),  # e_phnum
                            Core.SHDR_SIZE,   # e_shentsize
-                           0,                # e_shnum
+                           0, #1 + len(self.mmaps),  # e_shnum
                            0                 # e_shstrndx
                            )
         f.write(data)
 
-    def _write_pt_load_header(self, f, mmap, p_offset, p_align):
+    def _write_pt_note_phdr(self, f, p_offset, note_data):
+        data = struct.pack(Core.PHDR_FORMAT,
+                           4,               # ptype = PT_NOTE
+                           p_offset,
+                           0x00000000,      # p_vaddr
+                           0x00000000,      # p_paddr
+                           len(note_data),  # p_filesz
+                           0,               # p_memsz
+                           0x4,             # p_flags = r
+                           1,               # p_align
+                           )
+        f.write(data)
+
+    def _write_pt_load_phdr(self, f, mmap, p_offset, p_align):
         data = struct.pack(Core.PHDR_FORMAT,
                            1,               # p_type = PT_LOAD
                            p_offset,        # p_offset
                            mmap.addr,       # p_vaddr
-                           mmap.addr,       # p_paddr
+                           0, #mmap.addr,       # p_paddr
                            len(mmap.data),  # p_filesz
                            len(mmap.data),  # p_memsz
                            0x7,             # p_flags = rwx
-                           p_align          # p_align
+                           1, #p_align          # p_align
                            )
         f.write(data)
+
+    def _write_null_shdr(self, f):
+        f.write(b'\x00'*Core.SHDR_SIZE)
+
+    #def _write_progbits_shdr(self, f, mmap, sh_offset, sh_addralign):
+    #    data = struct.pack(Core.SHDR_FORMAT,
+    #                       0,               # sh_name (string tbl index)
+    #                       1,               # sh_type = SHT_PROGBITS
+    #                       3,               # sh_flags = (SHF_WRITE | SHF_ALLOC)
+    #                       mmap.addr,       # sh_addr
+    #                       sh_offset,       # sh_offset
+    #                       len(mmap.data),  # sh_size
+    #                       0,               # sh_link
+    #                       0,               # sh_info
+    #                       1, #sh_addralign,    # sh_addralign
+    #                       0,               # sh_entsize
+    #                       )
+    #    f.write(data)
 
     def add_mem_map(self, addr, data):
         '''
@@ -62,6 +123,17 @@ class Core:
         address.
         '''
         self.mmaps.append(MemMap(addr, data))
+
+    def add_thread(self):
+        '''
+        Adds a thread.
+        '''
+        ns = NoteSection()
+        ns.add_prpsinfo('xtalx', 'xtalx')
+        ns.add_prstatus(1, 9,
+                        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                         0, 0])
+        self.notes.append(ns)
 
     def write(self, path):
         '''
@@ -77,22 +149,47 @@ class Core:
         '''
         # Compute the length of all combined headers and then find where the
         # data offset would be from there based on the data alignment.
-        hdr_size    = Core.EHDR_SIZE + len(self.mmaps)*Core.PHDR_SIZE
+        hdr_size    = (Core.EHDR_SIZE +
+                       len(self.notes)*Core.PHDR_SIZE +
+                       len(self.mmaps)*Core.PHDR_SIZE +
+                       #(1 + len(self.mmaps))*Core.SHDR_SIZE
+                       0
+                       )
+        note_offset = hdr_size
+        note_size   = sum([len(n.data) for n in self.notes])
         data_align  = 4096
-        data_offset = round_up_pow_2(hdr_size, data_align)
+        data_offset = round_up_pow_2(hdr_size + note_size, data_align)
 
         # Start with the ELF header.
         self._write_elf_header(f)
 
+        # Now, write each PT_NOTE header.
+        pos = note_offset
+        for n in self.notes:
+            self._write_pt_note_phdr(f, pos, n.data)
+            pos += len(n.data)
+
         # Now, write a PT_LOAD header for each memory mapping.
         pos = data_offset
         for m in self.mmaps:
-            self._write_pt_load_header(m, pos, data_align)
+            self._write_pt_load_phdr(f, m, pos, data_align)
             pos += round_up_pow_2(len(m.data), data_align)
 
+        ## Now, write a PROGBITS section header for each memory mapping.
+        #pos = data_offset
+        #self._write_null_shdr(f)
+        #for m in self.mmaps:
+        #    self._write_progbits_shdr(f, m, pos, data_align)
+        #    pos += round_up_pow_2(len(m.data), data_align)
+
+        # Now, write the PT_NOTE sections.
+        for n in self.notes:
+            f.write(n.data)
+
         # Now, write the memory mappings themselves.
-        pos = data_offset
+        pos = hdr_size + note_size
+        assert pos == f.tell()
         for m in self.mmaps:
-            pad = round_up_pow_2(pos, data_align)
+            pad = round_up_pow_2(pos, data_align) - pos
             f.write(b'\x00'*pad)
             f.write(m.data)
