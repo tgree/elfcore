@@ -51,12 +51,12 @@ class NoteSection:
         of 17 or 18 values with the following contents, depending on if FPSCR
         is included:
         
-            [r0, ..., r15, <fpscr>, xpsr]
+            [r0, ..., r15, xpsr, <fpscr>]
         '''
         assert len(regs) in (17, 18)
         fpvalid = (len(regs) == 18)
         if not fpvalid:
-            regs = regs[:16] + [0] + regs[16:]
+            regs += [0]
         data = struct.pack('<12xH10xL44x18LL', sig, pid, *regs, fpvalid)
         assert len(data) == 148
         self.add_note('CORE', 1, data)

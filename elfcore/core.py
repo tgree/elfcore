@@ -112,7 +112,7 @@ class Core:
         Adds a thread.  The registers are either a 17- or 18-entry array with
         the following contents, depending on if FPSCR is included or not:
         
-            [r0, ..., r15, <fpscr>, xpsr]
+            [r0, ..., r15, xpsr, <fpscr>]
         '''
         ns = NoteSection()
         ns.add_prpsinfo('xtalx', 'xtalx')
