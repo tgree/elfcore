@@ -48,16 +48,24 @@ class NoteSection:
     def add_prstatus(self, pid, sig, regs):
         '''
         Adds an NT_PRSTATUS note to the section.  The regs should be an array
-        of 17 or 18 values with the following contents, depending on if FPSCR
-        is included:
+        of 17 values with the following contents:
         
-            [r0, ..., r15, xpsr, <fpscr>]
+            [r0, ..., r15, xpsr]
+
+        It's really confusing about what all registers can actually go in here.
+        Useful sources:
+
+            1. Linux kernel: arch/arm/include/uapi/asm/ptrace.h
+            2. Google coredumper: trunk/src/elfcore.h
+            3. binutils-gdb: gdb/arch/arm.h
+            4. /usr/include on arm: grep for the prstatus struct.
+
+        It looks like there should actually be 18 values but it isn't clear
+        what the 18th register would be.  'info regs' in gdb only displays
+        17 registers.
         '''
-        assert len(regs) in (17, 18)
-        fpvalid = (len(regs) == 18)
-        if not fpvalid:
-            regs += [0]
-        data = struct.pack('<12xH10xL44x18LL', sig, pid, *regs, fpvalid)
+        assert len(regs) == 17
+        data = struct.pack('<12xH10xL44x17LLL', sig, pid, *regs, 0, 0)
         assert len(data) == 148
         self.add_note('CORE', 1, data)
 
