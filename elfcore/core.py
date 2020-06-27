@@ -5,25 +5,6 @@ from .mmap import MemMap
 from .note import NoteSection
 
 
-# elf32-arm.c:elf32_arm_nabi_write_core_note()
-# NT_PRPSINFO:
-#   owner = "CORE"
-#   data[128] = {0...}
-#   strncpy(data + 28, va_arg(ap, const char*), 16)
-#   strncpy(data + 44, va_arg(ap, const char*), 80)
-#
-# NT_PRSTATUS:
-#   owner = "CORE"
-#   data[148] = {0...}
-#   bfd_put_32(pid, data + 24)
-#   bfd_put_16(cursig, data + 12)
-#   memcpy(data + 72, greg, 72)
-#   gregs looks like:
-#       r0 - r15
-#       CPSR
-#       FPSCR
-
-
 def round_up_pow_2(v, p2):
     return ((v + p2 - 1) & ~(p2 - 1))
 
